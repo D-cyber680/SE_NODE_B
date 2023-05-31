@@ -20,23 +20,17 @@
 #include "nvs_flash.h"
 #include "packagedata.h"
 #include "crc32.h"
-// #include "mpu6050/mpu6050.h"
+#include "mpu6050.h"
 
 static const char *TAG = "NODE B: ";
-float self_test[6] = {0, 0, 0, 0, 0, 0};
-float accel_bias[3] = {0, 0, 0};
-float gyro_bias[3] = {0, 0, 0};
 
-#define PI 3.14159265358979323846f
-#define AVG_BUFF_SIZE 20
 #define I2C_MASTER_SCL_IO 22        /*!< GPIO number used for I2C master clock */
 #define I2C_MASTER_SDA_IO 21        /*!< GPIO number used for I2C master data  */
-#define I2C_FREQ_HZ 100000          /*!< I2C master clock frequency */
+#define I2C_MASTER_NUM 0            /*!< I2C master i2c port number, the number of i2c peripheral interfaces available will depend on the chip */
+#define I2C_MASTER_FREQ_HZ 400000   /*!< I2C master clock frequency */
 #define I2C_MASTER_TX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
 #define I2C_MASTER_RX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
 #define I2C_MASTER_TIMEOUT_MS 1000
-#define SAMPLE_SIZE 2000
-#define I2C_PORT I2C_NUM_0
 
 #define ESP_CHANNEL 1
 
@@ -48,7 +42,26 @@ float gyro_bias[3] = {0, 0, 0};
 #define CMD_SHOWTEMP_B 0xEE
 
 static uint8_t peer_mac[ESP_NOW_ETH_ALEN] = {0x40, 0x91, 0x51, 0xbf, 0xf5, 0x94}; // estacion AP R (40:91:51:bf:f5:94)
-                                                                                  //  STA  I (40:22:d8:ee:6d:a4)
+int16_t dato = 0;
+
+static esp_err_t i2c_master_init(void)
+{
+    int i2c_master_port = I2C_MASTER_NUM;
+
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+    };
+
+    i2c_param_config(i2c_master_port, &conf);
+
+    return i2c_driver_install(i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
+}
+//  STA  I (40:22:d8:ee:6d:a4)
 static esp_err_t init_wifi(void)
 {
     wifi_init_config_t wifi_init_config = WIFI_INIT_CONFIG_DEFAULT();
@@ -113,9 +126,14 @@ static esp_err_t esp_now_send_data(const uint8_t *peer_addr, const uint8_t *data
 
 void app_main(void)
 {
-    uint8_t dato = 0;
     char msg_pack[MSG_TAM_STR];
 
+    ESP_ERROR_CHECK(i2c_master_init());
+    mpu6050_init();
+    mpu6050_set_rate(200);
+    // mpu6050_set_dlpf_mode(5);              // modo 5: low pass filter
+    // mpu6050_set_full_scale_gyro_range(1);  // scale 1 en giroscopio
+    // mpu6050_set_full_scale_accel_range(1); // scale 1 en acelerometro
     ESP_ERROR_CHECK(init_wifi());
     ESP_ERROR_CHECK(init_esp_now());
     ESP_ERROR_CHECK(register_peer(peer_mac));
@@ -123,19 +141,18 @@ void app_main(void)
     // Creo el apuntador a un paquete vacio
     NODE_Package *pkg = (NODE_Package *)malloc(sizeof(NODE_Package));
 
-    while (true)
+    while (mpu6050_test_connection())
     {
-        dato = 18;
+        dato = mpu6050_get_temperature() / 340 + 37;
+        ESP_LOGI(TAG, "Dato es: %d\n",dato);
         // Creo el paquete con contenido
         createPackage(pkg, HEADER_NODE_B, CMD_SHOWTEMP_B, 2, 0, 0, 0, dato, END_NODE_B);
         // Convierto El paquete a Cadena
         PackageToString(pkg, msg_pack);
         // Convertimos char* -> uint8_t * para poder usar la funcion de esp_now_send_data
-        // const uint8_t *message = (const uint8_t *)msg_pack;
         // Enviamos
         esp_now_send_data(peer_mac, (const uint8_t *)msg_pack, 24);
-        //showPackage(pkg);
-        vTaskDelay(pdMS_TO_TICKS(4000));
+        // showPackage(pkg);
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
-
 }
